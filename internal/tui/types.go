@@ -19,6 +19,12 @@ type Worktree struct {
 	Branch   string
 	Path     string
 
+	// Base is the ref this worktree's branch is reviewed and merged
+	// against (see gitops.DefaultBaseRef) — git itself doesn't record what
+	// a branch was created from, so this is a best-effort pick, not
+	// necessarily what was passed to `git worktree add` originally.
+	Base string
+
 	Dirty  bool
 	Ahead  int
 	Behind int
@@ -43,12 +49,24 @@ func LoadWorktrees(cfg config.Config) ([]Worktree, []error) {
 	var rows []Worktree
 	var errs []error
 
+	// baseRefs caches DefaultBaseRef per repo path: it shells out to git a
+	// handful of times, and every worktree in the same repo shares the
+	// same answer.
+	baseRefs := make(map[string]string, len(cfg.Repos))
+
 	for _, repo := range cfg.Repos {
 		infos, err := gitops.ListWorktrees(repo.Path)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", repo.Name, err))
 			continue
 		}
+
+		base, ok := baseRefs[repo.Path]
+		if !ok {
+			base, _ = gitops.DefaultBaseRef(repo.Path)
+			baseRefs[repo.Path] = base
+		}
+
 		for _, info := range infos {
 			branch := info.Branch
 			if branch == "" {
@@ -59,6 +77,7 @@ func LoadWorktrees(cfg config.Config) ([]Worktree, []error) {
 				RepoPath: repo.Path,
 				Branch:   branch,
 				Path:     info.Path,
+				Base:     base,
 			}
 
 			if st, err := gitops.GetStatus(info.Path); err == nil {

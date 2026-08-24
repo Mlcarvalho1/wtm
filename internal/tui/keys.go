@@ -9,10 +9,13 @@ type keyMap struct {
 	NewAttach      key.Binding
 	Attach         key.Binding
 	Remove         key.Binding
+	Merge          key.Binding
 	Refresh        key.Binding
-	Preview        key.Binding
+	Tab            key.Binding
 	NextNeedsInput key.Binding
 	Filter         key.Binding
+	Palette        key.Binding
+	Help           key.Binding
 	Edit           key.Binding
 	Quit           key.Binding
 	Confirm        key.Binding
@@ -26,12 +29,34 @@ var keys = keyMap{
 	NewAttach:      key.NewBinding(key.WithKeys("N")),
 	Attach:         key.NewBinding(key.WithKeys("enter")),
 	Remove:         key.NewBinding(key.WithKeys("x")),
+	Merge:          key.NewBinding(key.WithKeys("m")),
 	Refresh:        key.NewBinding(key.WithKeys("r")),
-	Preview:        key.NewBinding(key.WithKeys("tab")),
+	Tab:            key.NewBinding(key.WithKeys("tab")),
 	NextNeedsInput: key.NewBinding(key.WithKeys("a")),
 	Filter:         key.NewBinding(key.WithKeys("/")),
+	Palette:        key.NewBinding(key.WithKeys(":")),
+	Help:           key.NewBinding(key.WithKeys("?")),
 	Edit:           key.NewBinding(key.WithKeys("e")),
 	Quit:           key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	Confirm:        key.NewBinding(key.WithKeys("enter")),
 	Cancel:         key.NewBinding(key.WithKeys("esc")),
+}
+
+// keybindHelp is the ordered [key, label] list shown in the '?' overlay —
+// the terminal equivalent of the design's KEYBINDS table.
+var keybindHelp = [][2]string{
+	{"j / k", "move cursor"},
+	{"enter", "attach session"},
+	{"tab", "cycle pane"},
+	{"n", "new worktree"},
+	{"N", "new + launch claude"},
+	{"m", "merge into base"},
+	{"x", "remove worktree"},
+	{"a", "next needs-input"},
+	{"/", "filter list"},
+	{":", "command palette"},
+	{"e", "open in $EDITOR"},
+	{"r", "refresh git status"},
+	{"?", "this panel"},
+	{"q", "quit (sessions persist)"},
 }

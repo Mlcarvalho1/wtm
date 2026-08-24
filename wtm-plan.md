@@ -88,21 +88,27 @@ wtm/
   cmd/wtm/main.go
   internal/
     gitops/
-      worktree.go   // add / remove / list, base-ref selection
+      worktree.go   // add / remove / list, base-ref selection, merge
       status.go     // dirty/ahead/behind parsing
+      diff.go       // numstat + unified-diff parsing, DefaultBaseRef
     session/
       tmux.go       // create / attach / kill / list sessions
     watch/
       poll.go       // tea.Tick loop, capture-pane, diff vs LastPane, classify state
       patterns.go   // "needs input" detection (permission prompts, etc.)
+    activity/
+      log.go        // in-memory, capped, most-recent-first fleet event feed
     config/
       config.go     // load/save yaml, worktree root dir, repo registry
     tui/
-      model.go      // root bubbletea model + Update/View
-      list.go       // worktree table (bubbles/table)
-      preview.go     // right-hand pane: tail of highlighted session's capture-pane
-      keys.go        // keymap
-      styles.go      // lipgloss styles
+      model.go       // root bubbletea model + Update/View, key routing
+      sidebar.go      // repo-grouped worktree list
+      header.go       // top bar, fleet counters, awaiting-you strip, tab strip
+      view_session.go, view_diff.go, view_activity.go  // the three main tabs
+      overlay.go      // new-worktree / confirm / palette / help modals
+      render.go       // shared text-layout helpers (clip/pad/fit)
+      keys.go         // keymap
+      styles.go       // lipgloss styles (Nocturne palette)
 ```
 
 ## Keybindings
@@ -112,12 +118,16 @@ wtm/
 - `N` — new worktree **and** immediately launch `claude` in it (fast path for
   spinning up several parallel tasks)
 - `enter` — attach (suspend TUI → `tmux attach`)
+- `tab` — cycle the session / diff / activity panes
+- `m` — merge the selected worktree's branch into its base ref (`--no-ff`,
+  on the repo's main checkout; the worktree and its session are untouched)
 - `x` — remove worktree (kill session, `git worktree remove`, optional branch delete)
 - `e` — open worktree path in `$EDITOR`
 - `r` — refresh git status manually
-- `tab` — toggle preview pane
 - `a` — jump to next row in `NeedsInput` state
 - `/` — filter list
+- `:` — command palette
+- `?` — keybinds & settings
 - `q` — quit (sessions keep running in the background)
 
 ## Fleet status (the "multiple agents" feature)
@@ -148,11 +158,24 @@ row — plain text tail, not a terminal emulation.
 
 ## What's deliberately cut vs Orca
 
-- No embedded browser, no GitHub/Linear/PR panels, no diff review UI, no
-  mobile companion, no SSH/remote worktrees, no multi-agent-type abstraction
-  (Codex, etc.) — none of these are in current scope.
+- No embedded browser, no GitHub/Linear/PR panels, no mobile companion, no
+  SSH/remote worktrees, no multi-agent-type abstraction (Codex, etc.) —
+  none of these are in current scope.
+- Diff review *is* in scope (Nocturne TUI redesign, 2026-08): a `diff` pane
+  shows `git diff <base>...HEAD` for the selected worktree (file list +
+  unified hunks), and `m` runs `git merge --no-ff <branch>` on the repo's
+  main checkout. Git itself doesn't remember what ref a branch was created
+  from, so the base ref is a best-effort pick (`gitops.DefaultBaseRef`:
+  upstream, then `origin/HEAD`, then local `main`/`master`) rather than
+  necessarily the exact ref `git worktree add` was given.
 - No background polling when idle/unfocused beyond the fleet-status ticker
   above; git status itself only refreshes on keypress/focus, not on a timer.
+- The `activity` pane is in-memory only, capped, and reset on restart — it
+  is *not* a persistence layer, just an accumulation of the same
+  live-derived events (state transitions, actions) the rest of the app
+  already produces, kept around instead of discarded. No "turns" or
+  tool-call counters: that's not something `capture-pane` text can be
+  reliably parsed for, so it's left out rather than guessed at.
 - These can be added later without an architecture change — e.g. Linear
   ticket → branch-name templating is just a config/format detail, not a new
   subsystem, since you already have a Linear MCP integration to draw ticket
