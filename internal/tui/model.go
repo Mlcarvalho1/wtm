@@ -17,6 +17,7 @@ import (
 	"github.com/Mlcarvalho1/wtm/internal/config"
 	"github.com/Mlcarvalho1/wtm/internal/gitops"
 	"github.com/Mlcarvalho1/wtm/internal/session"
+	"github.com/Mlcarvalho1/wtm/internal/termpty"
 	"github.com/Mlcarvalho1/wtm/internal/watch"
 )
 
@@ -29,7 +30,13 @@ const (
 	modeConfirm
 	modePalette
 	modeHelp
+	modeAttached
 )
+
+// doubleEscWindow is how quickly two Escape presses must follow each other
+// while attached to count as the local "detach" gesture rather than two
+// ordinary Escape keystrokes forwarded to the session.
+const doubleEscWindow = 500 * time.Millisecond
 
 type tabKind int
 
@@ -107,6 +114,9 @@ type Model struct {
 
 	paneSnapshot watch.Snapshot
 
+	attachment    *termpty.Attachment
+	attachLastEsc time.Time
+
 	width, height int
 
 	status string
@@ -160,7 +170,6 @@ type actionDoneMsg struct {
 	tone   activity.Tone
 }
 type actionErrMsg struct{ err error }
-type attachFinishedMsg struct{ err error }
 type editorFinishedMsg struct{ err error }
 
 type pollResultMsg struct {
@@ -322,13 +331,18 @@ func (m *Model) logTransition(branch string, from, to watch.State) {
 	m.activityLog.Add(branch, text, tone)
 }
 
-// Update handles all key/message routing. Attach is the one path that
-// suspends the TUI via tea.ExecProcess to hand the terminal to `tmux attach`.
+// Update handles all key/message routing. Attach embeds a live PTY-backed
+// terminal (internal/termpty) in place of the main content pane rather than
+// suspending the TUI.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.attachment != nil {
+			_, mainW, _, contentH := layoutMetrics(m.width, m.height, len(needsInputRows(m.visibleWorktrees())) > 0)
+			m.attachment.Resize(mainW, contentH-2)
+		}
 		return m, nil
 
 	case worktreesLoadedMsg:
@@ -359,9 +373,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
-	case attachFinishedMsg:
-		if msg.err != nil {
-			m.err = msg.err
+	case termpty.StartedMsg:
+		if msg.Err != nil {
+			m.mode = modeList
+			m.err = msg.Err
+			return m, nil
+		}
+		m.attachment = msg.Attachment
+		return m, nil
+
+	case termpty.FrameMsg:
+		return m, nil
+
+	case termpty.ExitedMsg:
+		if m.attachment != nil {
+			_ = m.attachment.Close()
+		}
+		m.attachment = nil
+		m.mode = modeList
+		if msg.Err != nil {
+			m.err = msg.Err
 		}
 		return m, loadWorktreesCmd(m.cfg)
 
@@ -443,6 +474,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePaletteKey(msg)
 	case modeHelp:
 		return m, nil // only esc (handled above) closes it
+	case modeAttached:
+		return m.handleAttachedKey(msg)
 	default:
 		return m.handleListKey(msg)
 	}
@@ -810,8 +843,8 @@ func (m Model) runCommand(label string) (tea.Model, tea.Cmd) {
 }
 
 // attach ensures a tmux session exists for wt (creating one running `claude`
-// if needed), then suspends the TUI and execs `tmux attach-session`,
-// resuming this model once the user detaches (Ctrl-b d) or the session ends.
+// if needed), then embeds a live PTY-backed `tmux attach-session` client in
+// the main content pane (internal/termpty) instead of suspending the TUI.
 func (m Model) attach(wt Worktree) (tea.Model, tea.Cmd) {
 	if !session.Exists(wt.Session) {
 		if err := session.New(wt.Session, wt.Path, "claude"); err != nil {
@@ -819,10 +852,31 @@ func (m Model) attach(wt Worktree) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	cmd := exec.Command("tmux", "attach-session", "-t", wt.Session)
-	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return attachFinishedMsg{err: err}
-	})
+	m.mode = modeAttached
+	m.tab = tabSession
+	_, mainW, _, contentH := layoutMetrics(m.width, m.height, len(needsInputRows(m.visibleWorktrees())) > 0)
+	return m, termpty.AttachCmd(wt.Session, mainW, contentH-2)
+}
+
+// handleAttachedKey forwards nearly every keystroke straight into the
+// attached PTY. tmux's own Ctrl-b d prefix reaches the session like any
+// other keystroke and "just works" for detaching, since it's a real tmux
+// client on the other end; a double Escape within doubleEscWindow is a
+// wtm-level backup detach for anyone who doesn't remember that prefix.
+func (m Model) handleAttachedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.attachment == nil {
+		m.mode = modeList
+		return m, nil
+	}
+	m.attachment.Forward(msg)
+	if msg.Type == tea.KeyEsc {
+		now := time.Now()
+		if !m.attachLastEsc.IsZero() && now.Sub(m.attachLastEsc) < doubleEscWindow {
+			_ = m.attachment.Detach()
+		}
+		m.attachLastEsc = now
+	}
+	return m, nil
 }
 
 // openEditor suspends the TUI to open wt's path in $EDITOR (falling back to
@@ -940,19 +994,7 @@ func (m Model) View() string {
 		fleetBar = renderFleetBar(width, needs)
 	}
 
-	headerH, footerH := 1, 1
-	fleetH := 0
-	if fleetBar != "" {
-		fleetH = 1
-	}
-	bodyH := max(height-headerH-fleetH-footerH, 3)
-
-	sidebarW := width * 3 / 10
-	sidebarW = min(max(sidebarW, 24), 44)
-	if sidebarW > width-20 {
-		sidebarW = max(width-20, 10)
-	}
-	mainW := max(width-sidebarW-1, 10)
+	sidebarW, mainW, bodyH, contentH := layoutMetrics(width, height, fleetBar != "")
 
 	sidebarListH := bodyH - 1 // footer line
 	var filterRow string
@@ -986,12 +1028,13 @@ func (m Model) View() string {
 		tabRight = sel.Path
 	}
 	tabStrip := renderTabStrip(m.tab, tabRight, mainW)
-	contentH := max(bodyH-1, 2)
 
 	var content string
 	switch {
 	case !hasSel:
 		content = styleDimmer.Render("no worktrees — press n to create one")
+	case m.mode == modeAttached && m.attachment != nil:
+		content = renderAttachedTab(sel, m.attachment.Render())
 	case m.tab == tabDiff:
 		content = renderDiffTab(sel, m.diffFiles, m.diffFileIdx, m.diffLines, m.diffLoading, m.diffErr, mainW, contentH)
 	case m.tab == tabActivity:

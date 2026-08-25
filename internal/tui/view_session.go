@@ -10,10 +10,10 @@ import (
 	"github.com/Mlcarvalho1/wtm/internal/watch"
 )
 
-// renderSessionTab draws the pane-preview tab: header line (branch, state
-// badge, session name), the tailed capture-pane box, and worktree/session
-// info boxes below it.
-func renderSessionTab(wt Worktree, lastChanged time.Time, width, height int) string {
+// sessionHeadLine renders the one-line branch/state-badge/session-name
+// header shared by the read-only session preview and the live attached view,
+// so the two stay visually consistent.
+func sessionHeadLine(wt Worktree) string {
 	// A single-line "pill" — no lipgloss Border here, which (even with
 	// Padding(0,1), a purely horizontal setting) still draws a top and
 	// bottom edge by default, silently making this "one line" badge three
@@ -22,8 +22,15 @@ func renderSessionTab(wt Worktree, lastChanged time.Time, width, height int) str
 		Foreground(colorAccentLight).
 		Render("[ " + stateLabel(wt.State) + " ]")
 
-	head := lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(wt.Branch) +
+	return lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(wt.Branch) +
 		"  " + badge + "  " + styleDimmer.Render(sessionLabel(wt))
+}
+
+// renderSessionTab draws the pane-preview tab: header line (branch, state
+// badge, session name), the tailed capture-pane box, and worktree/session
+// info boxes below it.
+func renderSessionTab(wt Worktree, lastChanged time.Time, width, height int) string {
+	head := sessionHeadLine(wt)
 
 	paneHeaderRight := "no session"
 	if wt.State != watch.StateStopped {

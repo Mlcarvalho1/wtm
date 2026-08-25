@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Mlcarvalho1/wtm/internal/config"
+	"github.com/Mlcarvalho1/wtm/internal/termpty"
 	"github.com/Mlcarvalho1/wtm/internal/tui"
 )
 
@@ -57,6 +58,7 @@ func runTUI() error {
 		return err
 	}
 	p := tea.NewProgram(tui.New(cfg))
+	termpty.Init(p)
 	_, err = p.Run()
 	return err
 }

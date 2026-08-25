@@ -113,3 +113,22 @@ func TestCapturePane_NonexistentSession(t *testing.T) {
 		t.Fatalf("expected error capturing pane of nonexistent session")
 	}
 }
+
+func TestDetach(t *testing.T) {
+	name := uniqueName(t)
+	dir := t.TempDir()
+
+	if err := New(name, dir, "sleep 100"); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer Kill(name)
+
+	// No attached client: detach-client is a no-op, not an error, and the
+	// session itself must survive either way.
+	if err := Detach(name); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if !Exists(name) {
+		t.Fatalf("Detach must not affect the session itself")
+	}
+}

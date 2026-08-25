@@ -47,6 +47,7 @@ var keys = keyMap{
 var keybindHelp = [][2]string{
 	{"j / k", "move cursor"},
 	{"enter", "attach session"},
+	{"esc esc", "detach (or ctrl-b d)"},
 	{"tab", "cycle pane"},
 	{"n", "new worktree"},
 	{"N", "new + launch claude"},

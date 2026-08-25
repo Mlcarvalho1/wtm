@@ -46,11 +46,18 @@ func List() ([]string, error) {
 
 // New starts a new detached tmux session named `name`, running `command` with
 // its working directory set to dir. Fails if a session with that name already exists.
+// The status bar is turned off: wtm's own header already shows equivalent
+// (and richer) context, so tmux's would just be a redundant line, most
+// noticeable when the session is embedded in wtm's own attached pane where
+// every row is scarce.
 func New(name, dir, command string) error {
 	if Exists(name) {
 		return fmt.Errorf("session %q already exists", name)
 	}
-	_, err := runTmux("new-session", "-d", "-s", name, "-c", dir, command)
+	if _, err := runTmux("new-session", "-d", "-s", name, "-c", dir, command); err != nil {
+		return err
+	}
+	_, err := runTmux("set-option", "-t", name, "status", "off")
 	return err
 }
 
@@ -60,6 +67,14 @@ func Kill(name string) error {
 		return nil
 	}
 	_, err := runTmux("kill-session", "-t", name)
+	return err
+}
+
+// Detach disconnects whatever client(s) are currently attached to a tmux
+// session, leaving the session (and the program running inside it) alive.
+// A no-op, not an error, if no client is attached.
+func Detach(name string) error {
+	_, err := runTmux("detach-client", "-s", name)
 	return err
 }
 

@@ -79,3 +79,26 @@ func dot(filled bool) string {
 	}
 	return "○"
 }
+
+// layoutMetrics computes the sidebar/main-column pixel budget from a raw
+// terminal size. View() uses it to lay out each frame; the attach flow uses
+// the exact same numbers to size the embedded PTY, so the two can never
+// drift apart the way hand-duplicated math eventually would (see fitHeight's
+// own doc comment on that failure mode).
+func layoutMetrics(width, height int, showFleetBar bool) (sidebarW, mainW, bodyH, contentH int) {
+	headerH, footerH := 1, 1
+	fleetH := 0
+	if showFleetBar {
+		fleetH = 1
+	}
+	bodyH = max(height-headerH-fleetH-footerH, 3)
+
+	sidebarW = width * 3 / 10
+	sidebarW = min(max(sidebarW, 24), 44)
+	if sidebarW > width-20 {
+		sidebarW = max(width-20, 10)
+	}
+	mainW = max(width-sidebarW-1, 10)
+	contentH = max(bodyH-1, 2)
+	return sidebarW, mainW, bodyH, contentH
+}
