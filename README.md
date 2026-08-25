@@ -46,6 +46,22 @@ details and a manual-install alternative.
 go build ./...
 ```
 
+## Versioning & updates
+
+`wtm` follows semver, currently `0.0.1`. Check the installed version and
+look for a newer one with:
+
+```sh
+wtm version   # print the installed version
+wtm update    # check GitHub for a newer release and reinstall it
+```
+
+`wtm update` checks the repo's latest GitHub release (falling back to its
+newest tag), and if it's newer than what's installed, reinstalls via
+`go install github.com/Mlcarvalho1/wtm/cmd/wtm@v<version>` — the same
+mechanism [install.sh](./install.sh) uses. It requires a Go toolchain on
+`PATH`.
+
 ## Keybindings
 
 - `j` / `k` — navigate rows

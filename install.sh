@@ -233,4 +233,5 @@ fi
 
 step "All set"
 info "run 'wtm' from inside any git repo to register it and open the fleet view."
+info "run 'wtm update' any time to check for and install a newer release."
 info "see USAGE.md for keybindings and a full walkthrough."

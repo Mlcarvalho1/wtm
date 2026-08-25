@@ -186,6 +186,29 @@ its tmux session if one exists). Both `m` and `x` ask for confirmation
 - `:` opens a command palette listing every action `wtm` supports, with its
   keybind, filterable by typing; `↑`/`↓` to move, `enter` to run.
 
+## Versioning and updates
+
+`wtm` tracks its own version (currently `0.0.1`, semver).
+
+```sh
+wtm version
+```
+
+prints the installed version.
+
+```sh
+wtm update
+```
+
+checks GitHub for the repo's latest published release (falling back to its
+newest tag if there's no release yet), and if it's newer than the
+currently installed version, reinstalls `wtm` via `go install
+github.com/Mlcarvalho1/wtm/cmd/wtm@v<version>` — the same mechanism
+`install.sh` uses to build the binary in the first place. It needs a Go
+toolchain on `PATH` and network access to `api.github.com`. If you're
+already on the latest version (or no release has been published yet), it
+says so and exits without touching anything.
+
 ## Headless mode
 
 For scripting, or a quick check without opening the TUI:
