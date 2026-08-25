@@ -13,17 +13,22 @@ import (
 	"github.com/Mlcarvalho1/wtm/internal/config"
 	"github.com/Mlcarvalho1/wtm/internal/termpty"
 	"github.com/Mlcarvalho1/wtm/internal/tui"
+	"github.com/Mlcarvalho1/wtm/internal/version"
 )
 
 func main() {
 	root := &cobra.Command{
-		Use:   "wtm",
-		Short: "Lightweight worktree/agent manager",
+		Use:     "wtm",
+		Short:   "Lightweight worktree/agent manager",
+		Version: version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTUI()
 		},
 	}
+	root.SetVersionTemplate("wtm v{{.Version}}\n")
 	root.AddCommand(lsCmd())
+	root.AddCommand(versionCmd())
+	root.AddCommand(updateCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
