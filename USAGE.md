@@ -68,6 +68,8 @@ Input** — press `a` any time to jump straight to the next one.
 | `x` | remove the worktree |
 | `e` | open the worktree's path in `$EDITOR` |
 | `r` | refresh git status |
+| `s` | (diff tab) toggle split / unified diff view |
+| `[` / `]` | (diff tab) previous / next file |
 | `a` | jump to the next row needing input |
 | `/` | filter the list |
 | `:` | command palette |
@@ -104,7 +106,11 @@ While attached:
   `tmux attach` yourself.
 - **`Ctrl-b d`** (tmux's own detach prefix) or **pressing `Esc` twice
   quickly** detaches wtm's view. The session itself, and everything running
-  in it, keeps going in the background.
+  in it, keeps going in the background. Only the *first* `Esc` is forwarded
+  to the session; the second one (the one that actually triggers the
+  detach) is swallowed by `wtm` rather than sent on — so double-`Esc` won't
+  also trigger whatever a program inside the session (e.g. `claude`) does
+  on its own double-`Esc`.
 - Because it's a real tmux client underneath, **tmux's own commands work
   for running multiple terminals in the same worktree**:
   - `Ctrl-b c` — open a new window running a plain shell (not `claude` —
@@ -126,8 +132,12 @@ While attached:
 - **session** — the live attached terminal (see above), or a read-only tail
   of the pane's last output when not attached.
 - **diff** — the worktree's changes against its base ref
-  (`git diff base...HEAD`). A file list on the left, unified diff on the
-  right; `]` / `[` move between files.
+  (`git diff base...HEAD`). A file list on the left, the selected file's
+  diff on the right; `]` / `[` move between files. The right pane defaults
+  to a unified diff; press `s` (or click the hint in the footer) to switch
+  to a side-by-side split view like GitHub's or VS Code's — old lines on
+  the left, new lines on the right, paired up line-by-line. `s` again (or
+  the same click) switches back.
 - **activity** — an in-memory feed of fleet events for this session
   (created, state transitions, merged, removed). Not persisted — it only
   covers the current `wtm` run.

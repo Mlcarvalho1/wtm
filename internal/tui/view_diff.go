@@ -12,13 +12,15 @@ import (
 const diffFileListWidth = 30
 
 // renderDiffTab draws the two-pane diff review: a file list on the left
-// (numstat +/- counts) and the selected file's unified diff hunks on the
-// right, with a merge/discard action row along the bottom. Both the file
-// list and the hunk pane are clickable/hoverable, and the hunk pane scrolls
-// (scroll is a line offset, clamped internally to what the content and
-// height actually allow — callers just track a monotonically-adjusted
-// counter without needing to know the max).
-func renderDiffTab(wt Worktree, files []gitops.FileDiff, fileIdx int, lines []gitops.DiffLine, loading bool, err error, width, height, scroll int, rc renderCtx) string {
+// (numstat +/- counts) and the selected file's diff hunks on the right —
+// either unified or, when split is true, a GitHub/VSCode-style side-by-side
+// layout (see renderSplitRows) — with a merge/discard/split-toggle action
+// row along the bottom. Both the file list and the hunk pane are
+// clickable/hoverable, and the hunk pane scrolls (scroll is a line offset,
+// clamped internally to what the content and height actually allow —
+// callers just track a monotonically-adjusted counter without needing to
+// know the max).
+func renderDiffTab(wt Worktree, files []gitops.FileDiff, fileIdx int, lines []gitops.DiffLine, loading bool, err error, width, height, scroll int, split bool, rc renderCtx) string {
 	summary := diffSummary(files)
 	summaryLine := styleKicker.Render(summary)
 
@@ -63,10 +65,7 @@ func renderDiffTab(wt Worktree, files []gitops.FileDiff, fileIdx int, lines []gi
 	case len(files) == 0:
 		hunkBody = styleDimmer.Render("no changes relative to " + wt.Base)
 	default:
-		hunkLines := make([]string, 0, len(lines))
-		for _, l := range lines {
-			hunkLines = append(hunkLines, renderDiffLine(l, hunkW))
-		}
+		hunkLines := buildHunkRows(lines, hunkW, split)
 		maxScroll := max(len(hunkLines)-visibleHunkRows, 0)
 		scroll = min(max(scroll, 0), maxScroll)
 		visible := hunkLines[scroll:min(scroll+visibleHunkRows, len(hunkLines))]
@@ -95,11 +94,24 @@ func renderDiffTab(wt Worktree, files []gitops.FileDiff, fileIdx int, lines []gi
 	const discardText = "x — discard worktree"
 	discardHint := discardStyle.Render(discardText)
 
-	footerY := bodyH + 1
-	rc.addHit(hitMergeButton, 0, 0, footerY, lipgloss.Width(mergeText), footerY+1)
-	rc.addHit(hitDiscardButton, 0, lipgloss.Width(mergeText)+4, footerY, lipgloss.Width(mergeText)+4+lipgloss.Width(discardText), footerY+1)
+	splitStyle := lipgloss.NewStyle().Foreground(colorDim)
+	if rc.hovered(hitSplitToggle, 0) {
+		splitStyle = splitStyle.Background(colorHoverBg)
+	}
+	splitText := "s — split diff"
+	if split {
+		splitText = "s — unified diff"
+	}
+	splitHint := splitStyle.Render(splitText)
 
-	left := mergeHint + "    " + discardHint
+	footerY := bodyH + 1
+	discardX0 := lipgloss.Width(mergeText) + 4
+	splitX0 := discardX0 + lipgloss.Width(discardText) + 4
+	rc.addHit(hitMergeButton, 0, 0, footerY, lipgloss.Width(mergeText), footerY+1)
+	rc.addHit(hitDiscardButton, 0, discardX0, footerY, discardX0+lipgloss.Width(discardText), footerY+1)
+	rc.addHit(hitSplitToggle, 0, splitX0, footerY, splitX0+lipgloss.Width(splitText), footerY+1)
+
+	left := mergeHint + "    " + discardHint + "    " + splitHint
 	right := styleDimmer.Render(gitLong(wt))
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	footer := left + strings.Repeat(" ", gap) + right
@@ -120,10 +132,22 @@ func diffSummary(files []gitops.FileDiff) string {
 }
 
 func renderDiffLine(l gitops.DiffLine, width int) string {
-	switch l.Kind {
-	case gitops.DiffHunkHeader:
+	if l.Kind == gitops.DiffHunkHeader {
 		bg := lipgloss.NewStyle().Background(colorDiffHunkBg).Foreground(lipgloss.Color("#b5abfc"))
 		return bg.Render(clipPad(l.Text, width))
+	}
+	return renderDiffCell(&l, width)
+}
+
+// renderDiffCell renders one add/del/context line into a width-wide cell —
+// the unified view's whole row, or one side of a split-view row. l is nil
+// for the unpaired half of a split row whose other side ran longer (a
+// removal or addition run of unequal length within one hunk).
+func renderDiffCell(l *gitops.DiffLine, width int) string {
+	if l == nil {
+		return strings.Repeat(" ", max(width, 0))
+	}
+	switch l.Kind {
 	case gitops.DiffAdd:
 		bg := lipgloss.NewStyle().Background(colorDiffAddBg).Foreground(colorAdd)
 		return bg.Render(fmt.Sprintf("%4d ", l.LineNo)) + bg.Render(clipPad("+"+l.Text, max(width-5, 1)))
@@ -134,4 +158,82 @@ func renderDiffLine(l gitops.DiffLine, width int) string {
 		fg := lipgloss.NewStyle().Foreground(lipgloss.Color("#b2b6ca"))
 		return styleDimmer.Render(fmt.Sprintf("%4d ", l.LineNo)) + fg.Render(clipPad(" "+l.Text, max(width-5, 1)))
 	}
+}
+
+// buildHunkRows renders a file's diff lines into screen rows: one row per
+// DiffLine for the unified view, or GitHub/VSCode-style paired columns (see
+// renderSplitRows) when split is true.
+func buildHunkRows(lines []gitops.DiffLine, width int, split bool) []string {
+	if !split {
+		rows := make([]string, 0, len(lines))
+		for _, l := range lines {
+			rows = append(rows, renderDiffLine(l, width))
+		}
+		return rows
+	}
+	return renderSplitRows(lines, width)
+}
+
+// renderSplitRows lays a file's diff lines out as a side-by-side (old |
+// new) split view: a hunk header spans the full width, a context line
+// repeats identically on both sides, and each hunk's contiguous run of
+// removals is paired row-by-row against its immediately following run of
+// additions — unified diff always orders a changed block that way (all
+// its removals, then all its additions), so pairing consecutive runs lines
+// up before/after edits to the same lines the way GitHub and VSCode's split
+// diff do. A run longer than its counterpart leaves a blank cell on the
+// shorter side for its extra lines.
+func renderSplitRows(lines []gitops.DiffLine, width int) []string {
+	leftW := (width - 1) / 2
+	rightW := width - 1 - leftW
+	sep := styleDimmer.Render("│")
+
+	var rows []string
+	i := 0
+	for i < len(lines) {
+		switch lines[i].Kind {
+		case gitops.DiffHunkHeader:
+			rows = append(rows, renderDiffLine(lines[i], width))
+			i++
+
+		case gitops.DiffContext:
+			l := lines[i]
+			rows = append(rows, renderDiffCell(&l, leftW)+sep+renderDiffCell(&l, rightW))
+			i++
+
+		case gitops.DiffAdd:
+			// A pure-addition block: no removals immediately preceded it
+			// (e.g. lines added at the very start of a hunk).
+			j := i
+			for j < len(lines) && lines[j].Kind == gitops.DiffAdd {
+				j++
+			}
+			for k := i; k < j; k++ {
+				rows = append(rows, renderDiffCell(nil, leftW)+sep+renderDiffCell(&lines[k], rightW))
+			}
+			i = j
+
+		default: // gitops.DiffDel: a removal run, and whatever addition run follows it
+			delStart := i
+			for i < len(lines) && lines[i].Kind == gitops.DiffDel {
+				i++
+			}
+			addStart := i
+			for i < len(lines) && lines[i].Kind == gitops.DiffAdd {
+				i++
+			}
+			dels, adds := lines[delStart:addStart], lines[addStart:i]
+			for k := range max(len(dels), len(adds)) {
+				var l, r *gitops.DiffLine
+				if k < len(dels) {
+					l = &dels[k]
+				}
+				if k < len(adds) {
+					r = &adds[k]
+				}
+				rows = append(rows, renderDiffCell(l, leftW)+sep+renderDiffCell(r, rightW))
+			}
+		}
+	}
+	return rows
 }

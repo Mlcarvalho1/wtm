@@ -53,6 +53,8 @@ var keybindHelp = [][2]string{
 	{"N", "new + launch claude"},
 	{"m", "merge into base"},
 	{"x", "remove worktree"},
+	{"s", "diff: toggle split/unified view"},
+	{"[ / ]", "diff: prev/next file"},
 	{"a", "next needs-input"},
 	{"/", "filter list"},
 	{":", "command palette"},

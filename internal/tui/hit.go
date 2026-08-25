@@ -13,6 +13,7 @@ const (
 	hitDiffFile               // idx: index into the diff tab's file list
 	hitMergeButton
 	hitDiscardButton
+	hitSplitToggle // diff tab's split/unified view toggle
 	hitAttachButton
 	hitDetachButton
 	hitModalPrimary

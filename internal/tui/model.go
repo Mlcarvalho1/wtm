@@ -112,7 +112,8 @@ type Model struct {
 	diffLines   []gitops.DiffLine
 	diffLoading bool
 	diffErr     error
-	diffScroll  int // line offset into the current file's rendered hunk, for mouse-wheel scrolling
+	diffScroll  int  // line offset into the current file's rendered hunk, for mouse-wheel scrolling
+	diffSplit   bool // false = unified diff, true = side-by-side split view
 
 	activityScroll int // line offset into the activity log, for mouse-wheel scrolling
 
@@ -582,8 +583,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Diff-tab-only file cycling. Not a global keybind (no sidebar
-	// equivalent to conflict with), so it's handled outside the keyMap.
+	// Diff-tab-only file cycling and view toggle. Not global keybinds (no
+	// sidebar equivalent to conflict with), so they're handled outside the
+	// keyMap.
 	if m.tab == tabDiff && len(m.diffFiles) > 0 {
 		wt, ok := m.selectedWorktree()
 		switch msg.String() {
@@ -601,6 +603,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.diffLoading = true
 				return m, loadDiffFileCmd(wt, m.diffFiles[m.diffFileIdx].Path)
 			}
+		case "s":
+			m.diffSplit = !m.diffSplit
+			m.diffScroll = 0
+			return m, nil
 		}
 	}
 
@@ -909,19 +915,28 @@ func (m Model) attachFrameOrigin() (x0, y0 int) {
 // other keystroke and "just works" for detaching, since it's a real tmux
 // client on the other end; a double Escape within doubleEscWindow is a
 // wtm-level backup detach for anyone who doesn't remember that prefix.
+//
+// The second Escape of that pair is swallowed rather than forwarded: it's
+// wtm's own gesture, not input for whatever's running in the session, and
+// forwarding it anyway would hand a bare Escape to programs — Claude Code
+// included — that treat a quick double-Escape as their own shortcut (e.g.
+// rewinding/clearing input), right as wtm detaches. A lone Escape (no
+// second one following within the window) still goes through untouched.
 func (m Model) handleAttachedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.attachment == nil {
 		m.mode = modeList
 		return m, nil
 	}
-	m.attachment.Forward(msg)
 	if msg.Type == tea.KeyEsc {
 		now := time.Now()
 		if !m.attachLastEsc.IsZero() && now.Sub(m.attachLastEsc) < doubleEscWindow {
 			_ = m.attachment.Detach()
+			m.attachLastEsc = time.Time{}
+			return m, nil
 		}
 		m.attachLastEsc = now
 	}
+	m.attachment.Forward(msg)
 	return m, nil
 }
 
@@ -1097,6 +1112,11 @@ func (m Model) click(r hitRegion) (tea.Model, tea.Cmd) {
 
 	case hitDiscardButton:
 		return m.openConfirm(confirmRemove)
+
+	case hitSplitToggle:
+		m.diffSplit = !m.diffSplit
+		m.diffScroll = 0
+		return m, nil
 
 	case hitAttachButton:
 		wt, ok := m.selectedWorktree()
@@ -1309,7 +1329,7 @@ func (m Model) View() string {
 	case m.mode == modeAttached && m.attachment != nil:
 		content = renderAttachedTab(sel, m.attachment.Render(), contentRC)
 	case m.tab == tabDiff:
-		content = renderDiffTab(sel, m.diffFiles, m.diffFileIdx, m.diffLines, m.diffLoading, m.diffErr, mainW, contentH, m.diffScroll, contentRC)
+		content = renderDiffTab(sel, m.diffFiles, m.diffFileIdx, m.diffLines, m.diffLoading, m.diffErr, mainW, contentH, m.diffScroll, m.diffSplit, contentRC)
 	case m.tab == tabActivity:
 		content = renderActivityTab(m.activityLog.Entries(), mainW, contentH, m.activityScroll)
 	default:

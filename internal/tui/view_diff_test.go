@@ -119,12 +119,66 @@ func TestRenderDiffTabScrollClamps(t *testing.T) {
 	}
 	rc := renderCtx{hits: &hitMap{}}
 
-	for _, scroll := range []int{-100, 0, 5, 1000} {
-		out := renderDiffTab(wt, files, 0, lines, false, nil, 80, 20, scroll, rc)
-		if out == "" {
-			t.Fatalf("scroll=%d: expected non-empty render", scroll)
+	for _, split := range []bool{false, true} {
+		for _, scroll := range []int{-100, 0, 5, 1000} {
+			out := renderDiffTab(wt, files, 0, lines, false, nil, 80, 20, scroll, split, rc)
+			if out == "" {
+				t.Fatalf("split=%v scroll=%d: expected non-empty render", split, scroll)
+			}
 		}
 	}
+}
+
+// TestRenderSplitRowsPairsChangesAndKeepsContext guards the split view's
+// core layout rule: a context line repeats on both sides of the row, a
+// same-length removal/addition run pairs up old-vs-new line by line, and an
+// unequal-length run leaves a blank cell on the shorter side rather than
+// misaligning or dropping lines.
+func TestRenderSplitRowsPairsChangesAndKeepsContext(t *testing.T) {
+	lines := []gitops.DiffLine{
+		{Kind: gitops.DiffHunkHeader, Text: "@@ -1,4 +1,3 @@"},
+		{Kind: gitops.DiffContext, LineNo: 1, Text: "unchanged"},
+		{Kind: gitops.DiffDel, LineNo: 2, Text: "old two"},
+		{Kind: gitops.DiffDel, LineNo: 3, Text: "old three"},
+		{Kind: gitops.DiffAdd, LineNo: 2, Text: "new two"},
+	}
+	// header, context, then one row per line of the longer (del) run: two
+	// change rows, the second with nothing to pair against on the right.
+	rows := renderSplitRows(lines, 60)
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d: %q", len(rows), rows)
+	}
+
+	leftHalf, rightHalf := splitOnSep(t, rows[1])
+	if !strings.Contains(leftHalf, "unchanged") || !strings.Contains(rightHalf, "unchanged") {
+		t.Errorf("expected context text on both sides of the split, got left=%q right=%q", leftHalf, rightHalf)
+	}
+
+	pairedLeft, pairedRight := splitOnSep(t, rows[2])
+	if !strings.Contains(pairedLeft, "old two") || !strings.Contains(pairedRight, "new two") {
+		t.Errorf("expected the del/add pair side by side, got left=%q right=%q", pairedLeft, pairedRight)
+	}
+
+	unpairedLeft, unpairedRight := splitOnSep(t, rows[3])
+	if !strings.Contains(unpairedLeft, "old three") {
+		t.Errorf("expected the unpaired second removal on the left, got %q", unpairedLeft)
+	}
+	if strings.TrimSpace(unpairedRight) != "" {
+		t.Errorf("expected a blank right side opposite the unpaired removal, got %q", unpairedRight)
+	}
+}
+
+// splitOnSep splits a split-view row on its "│" column separator, after
+// stripping ANSI styling — a plain byte-midpoint split would risk slicing
+// through the separator's multi-byte UTF-8 encoding instead.
+func splitOnSep(t *testing.T, row string) (left, right string) {
+	t.Helper()
+	plain := ansi.Strip(row)
+	parts := strings.SplitN(plain, "│", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected exactly one │ separator in row %q", plain)
+	}
+	return parts[0], parts[1]
 }
 
 func TestRenderDiffTabFileClickRegion(t *testing.T) {
@@ -135,7 +189,7 @@ func TestRenderDiffTabFileClickRegion(t *testing.T) {
 	}
 	h := &hitMap{}
 	rc := renderCtx{hits: h, x0: 2, y0: 5}
-	renderDiffTab(wt, files, 0, nil, true, nil, 80, 20, 0, rc)
+	renderDiffTab(wt, files, 0, nil, true, nil, 80, 20, 0, false, rc)
 
 	// File rows start after the "N files +A -D" summary line and a blank
 	// line — row 0 is at y=5+2, row 1 immediately below it.
