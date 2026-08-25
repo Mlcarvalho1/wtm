@@ -7,6 +7,33 @@ rationale and [wtm-plan.md](./wtm-plan.md) for the full design doc.
 
 ## Install
 
+### Installation wizard (macOS / Linux)
+
+The easiest way to get set up is the interactive installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mlcarvalho1/wtm/main/install.sh | bash
+```
+
+Or, from a checkout of this repo:
+
+```sh
+./install.sh
+```
+
+It checks for `git`, `tmux` and a recent enough `go` toolchain, offers to
+install anything missing via your platform's package manager (`brew` on
+macOS; `apt`/`dnf`/`pacman`/`apk`/`zypper` on Linux), builds and installs
+the `wtm` binary, makes sure it ends up on your `PATH` (offering to update
+your shell profile if not), and writes a default config file if one
+doesn't exist yet. Pass `-y`/`--yes` to accept every default without
+prompting (useful for scripted setups).
+
+Re-run the installer any time you pull new changes, to rebuild and update
+the installed binary.
+
+### Manual install
+
 From a checkout of this repo:
 
 ```sh

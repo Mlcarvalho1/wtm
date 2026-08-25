@@ -29,6 +29,17 @@ See [wtm-plan.md](./wtm-plan.md) for the full design doc.
 - `spf13/cobra` — optional headless CLI commands
 - `gopkg.in/yaml.v3` — config
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mlcarvalho1/wtm/main/install.sh | bash
+```
+
+An interactive wizard for macOS and Linux: checks for `git`/`tmux`/`go`,
+offers to install anything missing, builds and installs `wtm`, and sets up
+`PATH` and a default config. See [USAGE.md](./USAGE.md#install) for
+details and a manual-install alternative.
+
 ## Build
 
 ```sh
