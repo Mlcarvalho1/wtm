@@ -27,10 +27,20 @@ func sessionHeadLine(wt Worktree) string {
 }
 
 // renderSessionTab draws the pane-preview tab: header line (branch, state
-// badge, session name), the tailed capture-pane box, and worktree/session
-// info boxes below it.
-func renderSessionTab(wt Worktree, lastChanged time.Time, width, height int) string {
+// badge, session name, and a clickable/hoverable "enter — attach" button),
+// the tailed capture-pane box, and worktree/session info boxes below it.
+func renderSessionTab(wt Worktree, lastChanged time.Time, width, height int, rc renderCtx) string {
 	head := sessionHeadLine(wt)
+
+	attachStyle := styleButtonPrimary
+	if rc.hovered(hitAttachButton, 0) {
+		attachStyle = attachStyle.Background(colorHoverAccentBg)
+	}
+	const attachText = "enter — attach"
+	button := attachStyle.Render(attachText)
+	headGap := max(width-lipgloss.Width(head)-lipgloss.Width(button), 1)
+	head += strings.Repeat(" ", headGap) + button
+	rc.addHit(hitAttachButton, 0, width-lipgloss.Width(attachText), 0, width, 1)
 
 	paneHeaderRight := "no session"
 	if wt.State != watch.StateStopped {

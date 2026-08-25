@@ -9,11 +9,13 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 
@@ -177,9 +179,79 @@ func (a *Attachment) Forward(msg tea.KeyMsg) {
 }
 
 // Render returns the current screen as a plain string, sized to exactly the
-// emulator's configured cols x rows.
+// emulator's configured cols x rows, with a synthetic block cursor drawn at
+// the emulator's cursor position.
+//
+// Bubble Tea hides the *real* terminal cursor for the program's entire
+// lifetime (it's a TUI — every other cursor-like thing, e.g. bubbles'
+// textinput, is a glyph drawn into the rendered string, not the terminal's
+// own cursor), so without this the attached pane would never show one at
+// all, even though the tmux session underneath very much has one. There's
+// no public way to read the emulator's own cursor visibility/style, so this
+// always draws a plain reverse-video cell — a close enough stand-in for
+// "there is a cursor here" even when the real one would be, say, a blinking
+// bar instead of a block, or briefly hidden.
 func (a *Attachment) Render() string {
-	return a.emu.Render()
+	full := a.emu.Render()
+	pos := a.emu.CursorPosition()
+	w, h := a.emu.Width(), a.emu.Height()
+	if pos.X < 0 || pos.X >= w || pos.Y < 0 || pos.Y >= h {
+		return full
+	}
+
+	lines := strings.Split(full, "\n")
+	if pos.Y >= len(lines) {
+		return full
+	}
+
+	row := make(uv.Line, w)
+	for x := range w {
+		if c := a.emu.CellAt(x, pos.Y); c != nil {
+			row[x] = *c
+		} else {
+			row[x] = uv.EmptyCell
+		}
+	}
+	cursorCell := row[pos.X]
+	if cursorCell.Content == "" {
+		cursorCell.Content = " "
+		cursorCell.Width = 1
+	}
+	cursorCell.Style.Attrs ^= uv.AttrReverse
+	row[pos.X] = cursorCell
+
+	lines[pos.Y] = (&uv.Buffer{Lines: []uv.Line{row}}).Render()
+	return strings.Join(lines, "\n")
+}
+
+// Size returns the emulator's current cols x rows, for translating a mouse
+// event's screen coordinates into its cell grid and clamping them in range.
+func (a *Attachment) Size() (cols, rows int) {
+	return a.emu.Width(), a.emu.Height()
+}
+
+// ForwardMouse hands a mouse event (already translated into the emulator's
+// own cell grid) to the underlying tmux client, the same way Forward does
+// for keystrokes. Idle hover motion (no button held) is dropped rather than
+// forwarded: wtm-managed sessions only enable tmux's button-event mouse mode
+// (internal/session.New's `mouse on`), which never asks for plain
+// motion-without-a-button, so forwarding it would just be wasted PTY writes
+// tmux itself wouldn't act on.
+func (a *Attachment) ForwardMouse(msg tea.MouseMsg) {
+	if msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
+		return
+	}
+	m := toVTMouse(msg)
+	switch {
+	case msg.Button >= tea.MouseButtonWheelUp && msg.Button <= tea.MouseButtonWheelRight:
+		a.emu.SendMouse(vt.MouseWheel(m))
+	case msg.Action == tea.MouseActionRelease:
+		a.emu.SendMouse(vt.MouseRelease(m))
+	case msg.Action == tea.MouseActionMotion:
+		a.emu.SendMouse(vt.MouseMotion(m))
+	default:
+		a.emu.SendMouse(vt.MouseClick(m))
+	}
 }
 
 // Resize reflows both the emulator's screen and the PTY itself so the child

@@ -60,12 +60,15 @@ func sessionLabel(w Worktree) string {
 type sidebarRow struct {
 	text     string
 	selected bool // true when this line belongs to the cursor's worktree
+	owner    int  // index into rows this line belongs to, -1 for a group header
 }
 
 // renderSidebar draws the repo-grouped worktree list: a group header per
 // repo, two lines per worktree row (branch+status, then state+session),
-// scrolled so the cursor stays in view.
-func renderSidebar(rows []Worktree, cursor int, width, height int) string {
+// scrolled so the cursor stays in view. Each row is registered in rc's hit
+// map (hitSidebarRow, idx = its index into rows) so it can be clicked and,
+// via rc.hoverIdx, highlighted on hover.
+func renderSidebar(rows []Worktree, cursor int, width, height int, rc renderCtx) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
@@ -93,7 +96,7 @@ func renderSidebar(rows []Worktree, cursor int, width, height int) string {
 			header := styleKicker.Render(labelText) + " " +
 				styleDimmer.Render(strings.Repeat("─", ruleWidth)) + " " +
 				styleDimmer.Render(countText)
-			lines = append(lines, sidebarRow{text: padVisible(header, width)})
+			lines = append(lines, sidebarRow{text: padVisible(header, width), owner: -1})
 		}
 
 		isSel := i == cursor
@@ -120,8 +123,8 @@ func renderSidebar(rows []Worktree, cursor int, width, height int) string {
 		line2 := "  " + st + styleDimmer.Render(" · ") + sess
 		line2 = padVisible(line2, width)
 
-		lines = append(lines, sidebarRow{text: line1, selected: isSel})
-		lines = append(lines, sidebarRow{text: line2, selected: isSel})
+		lines = append(lines, sidebarRow{text: line1, selected: isSel, owner: i})
+		lines = append(lines, sidebarRow{text: line2, selected: isSel, owner: i})
 	}
 
 	// Window the flattened lines so the cursor's rows stay visible.
@@ -140,10 +143,17 @@ func renderSidebar(rows []Worktree, cursor int, width, height int) string {
 	out := make([]string, 0, height)
 	for i := top; i < bottom; i++ {
 		l := lines[i]
-		if l.selected {
-			out = append(out, lipgloss.NewStyle().Background(lipgloss.Color("#242038")).Render(l.text))
-		} else {
+		outY := len(out)
+		switch {
+		case l.selected:
+			out = append(out, lipgloss.NewStyle().Background(colorSelectedBg).Render(l.text))
+		case l.owner >= 0 && rc.hovered(hitSidebarRow, l.owner):
+			out = append(out, lipgloss.NewStyle().Background(colorHoverBg).Render(l.text))
+		default:
 			out = append(out, l.text)
+		}
+		if l.owner >= 0 {
+			rc.addHit(hitSidebarRow, l.owner, 0, outY, width, outY+1)
 		}
 	}
 	blank := strings.Repeat(" ", width)

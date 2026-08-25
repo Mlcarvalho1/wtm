@@ -57,7 +57,7 @@ func runTUI() error {
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(tui.New(cfg))
+	p := tea.NewProgram(tui.New(cfg), tea.WithMouseAllMotion())
 	termpty.Init(p)
 	_, err = p.Run()
 	return err

@@ -25,6 +25,27 @@ var (
 
 	colorAdd = colorAccentLight
 	colorDel = colorDim
+
+	// Per-line-kind hunk backgrounds — stand-ins for the design's hunkBg
+	// alpha tints (add: accent@8%, del: text@3.5%, hunk: accent@5%,
+	// context/gap: transparent), pushed noticeably past those percentages:
+	// alpha blending against the design's lighter canvas reads clearly at
+	// those low opacities, but the same math against this terminal's much
+	// darker solid background collapses into near-invisibility — these are
+	// picked to stay visibly distinct from colorBg and from each other
+	// instead of reproducing the alpha values literally.
+	colorDiffAddBg  = lipgloss.Color("#2c2547")
+	colorDiffDelBg  = lipgloss.Color("#332e38")
+	colorDiffHunkBg = lipgloss.Color("#362a5c")
+
+	// Row highlight backgrounds: solid stand-ins for the design's
+	// alpha-blended `style-hover`/selection tints, since a terminal cell has
+	// no alpha channel. Selected stays the brightest (cursor position);
+	// hover is a subtler step so the two read as distinct when a hovered
+	// row isn't also the selected one.
+	colorSelectedBg    = lipgloss.Color("#242038")
+	colorHoverBg       = lipgloss.Color("#1c1a2a")
+	colorHoverAccentBg = lipgloss.Color("#2a2640")
 )
 
 var (
@@ -47,6 +68,7 @@ var (
 
 	styleTabActive   = lipgloss.NewStyle().Bold(true).Foreground(colorAccentLight)
 	styleTabInactive = lipgloss.NewStyle().Foreground(colorDim)
+	styleTabHover    = lipgloss.NewStyle().Foreground(colorText)
 
 	styleBadge = lipgloss.NewStyle().Foreground(colorAccentLight).Border(lipgloss.NormalBorder(), false, false, false, false)
 

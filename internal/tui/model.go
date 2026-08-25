@@ -38,6 +38,11 @@ const (
 // ordinary Escape keystrokes forwarded to the session.
 const doubleEscWindow = 500 * time.Millisecond
 
+// doubleClickWindow mirrors doubleEscWindow for mouse clicks: two left
+// clicks on the same sidebar row within this long count as a double-click
+// (attach), matching the design's onDoubleClick handler.
+const doubleClickWindow = 500 * time.Millisecond
+
 type tabKind int
 
 const (
@@ -107,6 +112,9 @@ type Model struct {
 	diffLines   []gitops.DiffLine
 	diffLoading bool
 	diffErr     error
+	diffScroll  int // line offset into the current file's rendered hunk, for mouse-wheel scrolling
+
+	activityScroll int // line offset into the activity log, for mouse-wheel scrolling
 
 	activityLog *activity.Log
 	lastChanged map[string]time.Time   // session name -> when its pane last changed
@@ -116,6 +124,17 @@ type Model struct {
 
 	attachment    *termpty.Attachment
 	attachLastEsc time.Time
+
+	// Mouse plumbing: hits is rebuilt from scratch by every View() call and
+	// consulted by the next mouse event in Update() (see hit.go's own doc
+	// comment on why one frame of staleness is fine). hoverKind/hoverIdx is
+	// whatever region the pointer was last found over, for hover styling;
+	// lastClick* is state for sidebar-row double-click-to-attach detection.
+	hits         *hitMap
+	hoverKind    hitKind
+	hoverIdx     int
+	lastClickIdx int
+	lastClickAt  time.Time
 
 	width, height int
 
@@ -150,6 +169,9 @@ func New(cfg config.Config) Model {
 		activityLog:  activity.NewLog(200),
 		lastChanged:  make(map[string]time.Time),
 		knownState:   make(map[string]watch.State),
+		hits:         &hitMap{},
+		hoverKind:    hitNone,
+		lastClickIdx: -1,
 	}
 }
 
@@ -418,6 +440,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.diffFiles = msg.files
 		m.diffFileIdx = 0
+		m.diffScroll = 0
 		m.diffErr = msg.err
 		m.diffLines = nil
 		if msg.err == nil && len(msg.files) > 0 {
@@ -442,6 +465,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 
 	return m, nil
@@ -564,12 +590,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "]":
 			if ok {
 				m.diffFileIdx = (m.diffFileIdx + 1) % len(m.diffFiles)
+				m.diffScroll = 0
 				m.diffLoading = true
 				return m, loadDiffFileCmd(wt, m.diffFiles[m.diffFileIdx].Path)
 			}
 		case "[":
 			if ok {
 				m.diffFileIdx = (m.diffFileIdx - 1 + len(m.diffFiles)) % len(m.diffFiles)
+				m.diffScroll = 0
 				m.diffLoading = true
 				return m, loadDiffFileCmd(wt, m.diffFiles[m.diffFileIdx].Path)
 			}
@@ -697,6 +725,7 @@ func (m *Model) syncDiffIfNeeded() tea.Cmd {
 	m.diffFiles = nil
 	m.diffLines = nil
 	m.diffFileIdx = 0
+	m.diffScroll = 0
 	m.diffErr = nil
 	m.diffLoading = true
 	return loadDiffFilesCmd(wt)
@@ -858,6 +887,23 @@ func (m Model) attach(wt Worktree) (tea.Model, tea.Cmd) {
 	return m, termpty.AttachCmd(wt.Session, mainW, contentH-2)
 }
 
+// attachFrameOrigin returns the embedded PTY frame's top-left cell in
+// absolute screen coordinates: sidebar + 1-column divider to its left,
+// header + optional fleet bar + tab strip + the attached view's own
+// head/hint lines above it. This is the exact geometry attach() and the
+// WindowSizeMsg resize handler already size the emulator against (mainW,
+// contentH-2), kept in one place so a mouse event's screen coordinates can
+// be translated into the emulator's own cell grid without drifting from it.
+func (m Model) attachFrameOrigin() (x0, y0 int) {
+	sidebarW, _, _, _ := layoutMetrics(m.width, m.height, false)
+	x0 = sidebarW + 1
+	y0 = 4 // header(1) + tab strip(1) + attached head(1) + hint(1)
+	if len(needsInputRows(m.visibleWorktrees())) > 0 {
+		y0++
+	}
+	return x0, y0
+}
+
 // handleAttachedKey forwards nearly every keystroke straight into the
 // attached PTY. tmux's own Ctrl-b d prefix reaches the session like any
 // other keystroke and "just works" for detaching, since it's a real tmux
@@ -875,6 +921,218 @@ func (m Model) handleAttachedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			_ = m.attachment.Detach()
 		}
 		m.attachLastEsc = now
+	}
+	return m, nil
+}
+
+// forwardMouseToAttachment translates a mouse event's absolute screen
+// coordinates into the attached PTY's own cell grid (see
+// attachFrameOrigin) and hands it to the emulator — wheel scroll included,
+// which is what makes the embedded terminal scrollable: wtm-managed
+// sessions run with tmux's own `mouse on` (internal/session.New), so a
+// forwarded wheel event drives tmux's native copy-mode/scrollback exactly
+// as it would for a real terminal, with no separate scrollback of our own
+// to keep in sync.
+func (m Model) forwardMouseToAttachment(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.attachment == nil {
+		return m, nil
+	}
+	x0, y0 := m.attachFrameOrigin()
+	w, h := m.attachment.Size()
+	msg.X = min(max(msg.X-x0, 0), max(w-1, 0))
+	msg.Y = min(max(msg.Y-y0, 0), max(h-1, 0))
+	m.attachment.ForwardMouse(msg)
+	return m, nil
+}
+
+// handleMouse dispatches a mouse event by mode: while attached, everything
+// goes straight to the PTY (see forwardMouseToAttachment) except the
+// detach-hint line's own region, which is checked first so that button
+// stays clickable/hoverable without ever leaking into the session;
+// otherwise motion updates hover state, wheel scrolls whatever pane is
+// under the pointer, and a left click/press activates whatever hitMap
+// region (if any) it landed on.
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeAttached {
+		if r, ok := m.hits.at(msg.X, msg.Y); ok && r.kind == hitDetachButton {
+			m.hoverKind, m.hoverIdx = hitDetachButton, 0
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				return m.click(r)
+			}
+			return m, nil
+		}
+		if m.hoverKind == hitDetachButton {
+			m.hoverKind, m.hoverIdx = hitNone, -1
+		}
+		return m.forwardMouseToAttachment(msg)
+	}
+
+	if msg.Action == tea.MouseActionMotion {
+		if r, ok := m.hits.at(msg.X, msg.Y); ok {
+			m.hoverKind, m.hoverIdx = r.kind, r.idx
+		} else {
+			m.hoverKind, m.hoverIdx = hitNone, -1
+		}
+		return m, nil
+	}
+
+	if isWheel(msg.Button) {
+		return m.handleWheel(msg)
+	}
+
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	r, ok := m.hits.at(msg.X, msg.Y)
+	if !ok {
+		return m, nil
+	}
+	return m.click(r)
+}
+
+// isWheel reports whether a mouse button is one of the wheel directions.
+// tea.MouseMsg is defined as `type MouseMsg MouseEvent`, a distinct named
+// type that doesn't inherit MouseEvent's own IsWheel method.
+func isWheel(b tea.MouseButton) bool {
+	switch b {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown, tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
+		return true
+	}
+	return false
+}
+
+// handleWheel scrolls whatever pane the pointer sits over: the sidebar
+// moves the cursor (matching j/k), the diff tab's file-list column cycles
+// the selected file while its hunk column scrolls, and the activity tab
+// scrolls its log.
+func (m Model) handleWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	dir := 1
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		dir = -1
+	case tea.MouseButtonWheelDown:
+		dir = 1
+	default:
+		return m, nil
+	}
+
+	sidebarW, _, _, _ := layoutMetrics(m.width, m.height, false)
+	if msg.X < sidebarW {
+		m.cursor = nextCursor(m.visibleWorktrees(), m.cursor, dir)
+		cmd := m.syncDiffIfNeeded()
+		return m, cmd
+	}
+
+	switch m.tab {
+	case tabDiff:
+		if msg.X < sidebarW+1+diffFileListWidth && len(m.diffFiles) > 0 {
+			wt, ok := m.selectedWorktree()
+			if !ok {
+				return m, nil
+			}
+			n := len(m.diffFiles)
+			m.diffFileIdx = ((m.diffFileIdx+dir)%n + n) % n
+			m.diffScroll = 0
+			m.diffLoading = true
+			return m, loadDiffFileCmd(wt, m.diffFiles[m.diffFileIdx].Path)
+		}
+		m.diffScroll = max(m.diffScroll+dir*3, 0)
+		return m, nil
+	case tabActivity:
+		m.activityScroll = max(m.activityScroll+dir*3, 0)
+		return m, nil
+	}
+	return m, nil
+}
+
+// click activates whatever the hitMap says (x, y) landed on.
+func (m Model) click(r hitRegion) (tea.Model, tea.Cmd) {
+	switch r.kind {
+	case hitOverlayBackdrop:
+		m.mode = modeList
+		return m, nil
+
+	case hitSidebarRow:
+		rows := m.visibleWorktrees()
+		if r.idx < 0 || r.idx >= len(rows) {
+			return m, nil
+		}
+		now := time.Now()
+		doubleClick := m.lastClickIdx == r.idx && !m.lastClickAt.IsZero() && now.Sub(m.lastClickAt) < doubleClickWindow
+		m.cursor = r.idx
+		m.lastClickIdx = r.idx
+		m.lastClickAt = now
+		cmd := m.syncDiffIfNeeded()
+		if doubleClick {
+			if wt, ok := m.selectedWorktree(); ok {
+				return m.attach(wt)
+			}
+		}
+		return m, cmd
+
+	case hitTab:
+		m.tab = tabKind(r.idx)
+		cmd := m.syncDiffIfNeeded()
+		return m, cmd
+
+	case hitCommandsButton:
+		m.mode = modePalette
+		m.paletteInput.SetValue("")
+		m.paletteInput.Focus()
+		m.paletteIdx = 0
+		return m, nil
+
+	case hitDiffFile:
+		wt, ok := m.selectedWorktree()
+		if !ok || r.idx < 0 || r.idx >= len(m.diffFiles) {
+			return m, nil
+		}
+		m.diffFileIdx = r.idx
+		m.diffScroll = 0
+		m.diffLoading = true
+		return m, loadDiffFileCmd(wt, m.diffFiles[r.idx].Path)
+
+	case hitMergeButton:
+		return m.openConfirm(confirmMerge)
+
+	case hitDiscardButton:
+		return m.openConfirm(confirmRemove)
+
+	case hitAttachButton:
+		wt, ok := m.selectedWorktree()
+		if !ok {
+			return m, nil
+		}
+		return m.attach(wt)
+
+	case hitDetachButton:
+		if m.attachment != nil {
+			_ = m.attachment.Detach()
+		}
+		return m, nil
+
+	case hitModalPrimary:
+		switch m.mode {
+		case modeNewWorktree:
+			return m.handleNewWorktreeKey(tea.KeyMsg{Type: tea.KeyEnter})
+		case modeConfirm:
+			return m.handleConfirmKey(tea.KeyMsg{Type: tea.KeyEnter})
+		}
+		return m, nil
+
+	case hitModalSecondary:
+		switch m.mode {
+		case modeNewWorktree, modeConfirm:
+			m.mode = modeList
+		}
+		return m, nil
+
+	case hitPaletteRow:
+		cmds := m.commandList()
+		if r.idx < 0 || r.idx >= len(cmds) {
+			return m, nil
+		}
+		return m.runCommand(cmds[r.idx][0])
 	}
 	return m, nil
 }
@@ -969,38 +1227,49 @@ func (m Model) View() string {
 		height = 32
 	}
 
+	m.hits.reset()
 	rows := m.visibleWorktrees()
-	header := renderHeader(width, countFleet(m.worktree))
+	headerRC := renderCtx{hits: m.hits, hoverKind: m.hoverKind, hoverIdx: m.hoverIdx}
+	header := renderHeader(width, countFleet(m.worktree), headerRC)
 
 	switch m.mode {
 	case modeNewWorktree:
-		modal := renderNewWorktreeModal(m.newRepo.Name, m.autoLaunch, m.branchInput.View(), m.baseInput.View(),
-			m.newFocusBase, m.newPathPreview(), m.newSessionPreview())
-		return header + "\n" + centerOverlay(width, height-1, modal)
+		modal, buttons := renderNewWorktreeModal(m.newRepo.Name, m.autoLaunch, m.branchInput.View(), m.baseInput.View(),
+			m.newFocusBase, m.newPathPreview(), m.newSessionPreview(), m.hoverKind)
+		return header + "\n" + m.placeOverlay(width, height-1, modal, buttons, 1)
 	case modeConfirm:
-		modal := renderConfirmModal(m.confirmTitle(), m.confirmSteps())
-		return header + "\n" + centerOverlay(width, height-1, modal)
+		modal, buttons := renderConfirmModal(m.confirmTitle(), m.confirmSteps(), m.hoverKind)
+		return header + "\n" + m.placeOverlay(width, height-1, modal, buttons, 1)
 	case modePalette:
-		modal := renderPaletteModal(m.paletteInput.View(), m.commandList(), m.paletteIdx)
-		return header + "\n" + centerOverlay(width, height-1, modal)
+		hoverIdx := -1
+		if m.hoverKind == hitPaletteRow {
+			hoverIdx = m.hoverIdx
+		}
+		modal, buttons := renderPaletteModal(m.paletteInput.View(), m.commandList(), m.paletteIdx, hoverIdx)
+		return header + "\n" + m.placeOverlay(width, height-1, modal, buttons, 1)
 	case modeHelp:
 		modal := renderHelpModal(m.settingsRows())
-		return header + "\n" + centerOverlay(width, height-1, modal)
+		return header + "\n" + m.placeOverlay(width, height-1, modal, nil, 1)
 	}
 
 	needs := needsInputRows(rows)
 	var fleetBar string
+	bodyY0 := 1
 	if len(needs) > 0 {
-		fleetBar = renderFleetBar(width, needs)
+		fleetBarRC := renderCtx{hits: m.hits, y0: 1, hoverKind: m.hoverKind, hoverIdx: m.hoverIdx}
+		fleetBar = renderFleetBar(width, needs, fleetBarRC)
+		bodyY0++
 	}
 
 	sidebarW, mainW, bodyH, contentH := layoutMetrics(width, height, fleetBar != "")
 
 	sidebarListH := bodyH - 1 // footer line
 	var filterRow string
+	sidebarY0 := bodyY0
 	if m.mode == modeFilter {
 		filterRow = padVisible(styleAccent.Render("/ ")+m.filterInput.View(), sidebarW)
 		sidebarListH--
+		sidebarY0++
 	}
 
 	sidebarFooter := fmt.Sprintf("%d worktrees · %d repos", len(rows), len(m.cfg.Repos))
@@ -1008,11 +1277,12 @@ func (m Model) View() string {
 		sidebarFooter += fmt.Sprintf(" · filtered %q", m.filterQuery)
 	}
 
+	sidebarRC := renderCtx{hits: m.hits, y0: sidebarY0, hoverKind: m.hoverKind, hoverIdx: m.hoverIdx}
 	var sidebarLines []string
 	if filterRow != "" {
 		sidebarLines = append(sidebarLines, filterRow)
 	}
-	sidebarLines = append(sidebarLines, renderSidebar(rows, m.cursor, sidebarW, sidebarListH))
+	sidebarLines = append(sidebarLines, renderSidebar(rows, m.cursor, sidebarW, sidebarListH, sidebarRC))
 	sidebarLines = append(sidebarLines, styleDimmer.Render(padVisible(sidebarFooter, sidebarW)))
 	sidebarBlock := strings.Join(sidebarLines, "\n")
 
@@ -1027,20 +1297,23 @@ func (m Model) View() string {
 	if hasSel {
 		tabRight = sel.Path
 	}
-	tabStrip := renderTabStrip(m.tab, tabRight, mainW)
+	mainX0 := sidebarW + 1
+	tabRC := renderCtx{hits: m.hits, x0: mainX0, y0: bodyY0, hoverKind: m.hoverKind, hoverIdx: m.hoverIdx}
+	tabStrip := renderTabStrip(m.tab, tabRight, mainW, tabRC)
 
+	contentRC := renderCtx{hits: m.hits, x0: mainX0, y0: bodyY0 + 1, hoverKind: m.hoverKind, hoverIdx: m.hoverIdx}
 	var content string
 	switch {
 	case !hasSel:
 		content = styleDimmer.Render("no worktrees — press n to create one")
 	case m.mode == modeAttached && m.attachment != nil:
-		content = renderAttachedTab(sel, m.attachment.Render())
+		content = renderAttachedTab(sel, m.attachment.Render(), contentRC)
 	case m.tab == tabDiff:
-		content = renderDiffTab(sel, m.diffFiles, m.diffFileIdx, m.diffLines, m.diffLoading, m.diffErr, mainW, contentH)
+		content = renderDiffTab(sel, m.diffFiles, m.diffFileIdx, m.diffLines, m.diffLoading, m.diffErr, mainW, contentH, m.diffScroll, contentRC)
 	case m.tab == tabActivity:
-		content = renderActivityTab(m.activityLog.Entries(), mainW, contentH)
+		content = renderActivityTab(m.activityLog.Entries(), mainW, contentH, m.activityScroll)
 	default:
-		content = renderSessionTab(sel, m.lastChanged[sel.Session], mainW, contentH)
+		content = renderSessionTab(sel, m.lastChanged[sel.Session], mainW, contentH, contentRC)
 	}
 	mainBlock := fitHeight(tabStrip+"\n"+content, mainW, bodyH)
 	sidebarBlock = fitHeight(sidebarBlock, sidebarW, bodyH)

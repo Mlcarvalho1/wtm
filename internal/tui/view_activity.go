@@ -9,7 +9,10 @@ import (
 )
 
 // renderActivityTab draws the fleet-wide activity feed, most recent first.
-func renderActivityTab(entries []activity.Entry, width, height int) string {
+// scroll is a line offset into entries, clamped internally to what height
+// actually allows — mirroring the diff tab's hunk scrolling, so a wheel
+// notch over either tab behaves the same way.
+func renderActivityTab(entries []activity.Entry, width, height, scroll int) string {
 	header := styleKicker.Render("FLEET ACTIVITY — ALL REPOS")
 	if len(entries) == 0 {
 		return header + "\n\n" + styleDimmer.Render("nothing yet")
@@ -17,13 +20,15 @@ func renderActivityTab(entries []activity.Entry, width, height int) string {
 
 	timeW, branchW := 8, 22
 	textW := max(width-timeW-branchW-4, 1)
+	listH := max(height-2, 1)
 
-	lines := make([]string, 0, len(entries)+2)
+	maxScroll := max(len(entries)-listH, 0)
+	scroll = min(max(scroll, 0), maxScroll)
+	visible := entries[scroll:min(scroll+listH, len(entries))]
+
+	lines := make([]string, 0, len(visible)+2)
 	lines = append(lines, header, "")
-	for _, e := range entries {
-		if len(lines) >= height {
-			break
-		}
+	for _, e := range visible {
 		textColor := lipgloss.NewStyle().Foreground(colorDim)
 		switch e.Tone {
 		case activity.ToneHighlight:

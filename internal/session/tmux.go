@@ -49,7 +49,10 @@ func List() ([]string, error) {
 // The status bar is turned off: wtm's own header already shows equivalent
 // (and richer) context, so tmux's would just be a redundant line, most
 // noticeable when the session is embedded in wtm's own attached pane where
-// every row is scarce.
+// every row is scarce. Mouse reporting is turned on so wtm's embedded PTY
+// view (internal/termpty) can forward wheel-scroll into tmux's own
+// copy-mode/scrollback, making the attached terminal scrollable without
+// wtm needing a scrollback implementation of its own.
 func New(name, dir, command string) error {
 	if Exists(name) {
 		return fmt.Errorf("session %q already exists", name)
@@ -57,7 +60,10 @@ func New(name, dir, command string) error {
 	if _, err := runTmux("new-session", "-d", "-s", name, "-c", dir, command); err != nil {
 		return err
 	}
-	_, err := runTmux("set-option", "-t", name, "status", "off")
+	if _, err := runTmux("set-option", "-t", name, "status", "off"); err != nil {
+		return err
+	}
+	_, err := runTmux("set-option", "-t", name, "mouse", "on")
 	return err
 }
 

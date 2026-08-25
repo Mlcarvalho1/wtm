@@ -33,8 +33,9 @@ func countFleet(rows []Worktree) fleetCounts {
 }
 
 // renderHeader draws the top bar: "wtm" title, fleet counters, and the
-// command-palette hint.
-func renderHeader(width int, c fleetCounts) string {
+// command-palette hint — itself a clickable/hoverable button matching the
+// design's ": commands" button.
+func renderHeader(width int, c fleetCounts, rc renderCtx) string {
 	title := styleTitle.Render("wtm") + "  " + styleSubtitle.Render("worktree · agent manager")
 
 	needsStyle := lipgloss.NewStyle().Foreground(colorText).Blink(c.needs > 0)
@@ -43,7 +44,12 @@ func renderHeader(width int, c fleetCounts) string {
 		"   " + lipgloss.NewStyle().Foreground(colorDim).Render(fmt.Sprintf("%d idle", c.idle)) +
 		"   " + lipgloss.NewStyle().Foreground(colorFaint).Render(fmt.Sprintf("%d stopped", c.stopped))
 
-	palette := lipgloss.NewStyle().Foreground(colorDim).Render(": commands")
+	const paletteText = ": commands"
+	paletteStyle := lipgloss.NewStyle().Foreground(colorDim)
+	if rc.hovered(hitCommandsButton, 0) {
+		paletteStyle = lipgloss.NewStyle().Foreground(colorAccentLight)
+	}
+	palette := paletteStyle.Render(paletteText)
 
 	left := title
 	right := counters + "   " + palette
@@ -51,6 +57,8 @@ func renderHeader(width int, c fleetCounts) string {
 	if gap < 1 {
 		gap = 1
 	}
+	buttonX0 := gap + lipgloss.Width(left) + lipgloss.Width(counters) + 3
+	rc.addHit(hitCommandsButton, 0, buttonX0, 0, buttonX0+len(paletteText), 1)
 	return padVisible(left+strings.Repeat(" ", gap)+right, width)
 }
 
@@ -71,14 +79,26 @@ func needsInputRows(rows []Worktree) []needsInputRow {
 }
 
 // renderFleetBar draws the "awaiting you" strip listing every worktree
-// currently needing human input, when any exist.
-func renderFleetBar(width int, rows []needsInputRow) string {
+// currently needing human input, when any exist. Each chip is clickable
+// (selects that worktree, same as clicking its sidebar row — so it shares
+// the hitSidebarRow region kind keyed by the same visible-list index) and
+// highlights on hover.
+func renderFleetBar(width int, rows []needsInputRow, rc renderCtx) string {
 	label := lipgloss.NewStyle().Foreground(colorAccentLight).Bold(true).Render("AWAITING YOU")
 	var chips []string
+	x := lipgloss.Width(label) + 2
 	for _, r := range rows {
-		chip := lipgloss.NewStyle().Foreground(colorText).Blink(true).Render("● ") +
-			lipgloss.NewStyle().Foreground(colorText).Render(r.Branch)
-		chips = append(chips, "["+chip+"]")
+		style := lipgloss.NewStyle().Foreground(colorText)
+		dotStyle := style.Blink(true)
+		if rc.hovered(hitSidebarRow, r.Idx) {
+			style = style.Background(colorHoverAccentBg)
+			dotStyle = dotStyle.Background(colorHoverAccentBg)
+		}
+		chip := style.Render("[") + dotStyle.Render("●") + style.Render(" "+r.Branch+"]")
+		chips = append(chips, chip)
+		chipW := lipgloss.Width(r.Branch) + 4
+		rc.addHit(hitSidebarRow, r.Idx, x, 0, x+chipW, 1)
+		x += chipW + 2
 	}
 	hint := lipgloss.NewStyle().Foreground(colorDim).Render("a — jump to next")
 
@@ -91,20 +111,27 @@ func renderFleetBar(width int, rows []needsInputRow) string {
 }
 
 // renderTabStrip draws the session/diff/activity tab row, right-aligned
-// with the selected worktree's path and a "tab to cycle" hint.
-func renderTabStrip(active tabKind, rightHint string, width int) string {
+// with the selected worktree's path and a "tab to cycle" hint. Each label is
+// clickable (switches to that tab) and highlights on hover.
+func renderTabStrip(active tabKind, rightHint string, width int, rc renderCtx) string {
 	tabs := []struct {
 		kind  tabKind
 		label string
 	}{{tabSession, "session"}, {tabDiff, "diff"}, {tabActivity, "activity"}}
 
 	var parts []string
+	x := 0
 	for _, t := range tabs {
 		style := styleTabInactive
-		if t.kind == active {
+		switch {
+		case t.kind == active:
 			style = styleTabActive
+		case rc.hovered(hitTab, int(t.kind)):
+			style = styleTabHover
 		}
 		parts = append(parts, style.Render(t.label))
+		rc.addHit(hitTab, int(t.kind), x, 0, x+len(t.label), 1)
+		x += len(t.label) + 3 // gap matches strings.Join(parts, "   ") below
 	}
 	left := strings.Join(parts, "   ")
 
