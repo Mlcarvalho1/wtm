@@ -14,6 +14,8 @@ var waitingPatterns = []string{
 	"Do you want to run this command",
 	"No, and tell Claude what to do differently",
 	"Yes, and don't ask again",
+	"Is this a project you created or one you trust",
+	"Yes, I trust this folder",
 }
 
 // IsWaiting reports whether pane looks like it's sitting at a prompt that
