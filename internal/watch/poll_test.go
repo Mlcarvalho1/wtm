@@ -98,6 +98,7 @@ func TestIsWaiting(t *testing.T) {
 		"regular claude output, still typing…": false,
 		"? for shortcuts":                      true,
 		"Do you want to proceed?":              true,
+		"Is this a project you created or one you trust?": true,
 	}
 	for pane, want := range cases {
 		if got := IsWaiting(pane); got != want {

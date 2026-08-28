@@ -170,6 +170,32 @@ wtm ls
 Prints one line per worktree across every registered repo (state icon, repo
 name, branch, path) and exits — no tmux attach, no interactivity.
 
+To create a worktree (and optionally launch `claude` in it) without the TUI,
+for scripting or orchestration:
+
+```sh
+wtm new <branch> [--repo <name>] [--base <ref>] [--launch] [--prompt "<text>"]
+```
+
+- `--repo` defaults to the repo in the current directory.
+- `--base` defaults to the same auto-detected ref the TUI uses
+  (`gitops.DefaultBaseRef`).
+- `--launch` does what `N` does in the TUI: create the worktree and start
+  `claude` in a detached tmux session in it.
+- `--prompt` (requires `--launch`) seeds that session by starting it as
+  `claude '<text>'` instead of a bare `claude`, so the agent begins working
+  on that text immediately instead of sitting at an empty prompt.
+
+This is what backs orchestrating several agents from a script or a Claude
+Skill instead of by hand — see `skills/wtm-linear/` for one that fans a
+Linear board out into one worktree+session per issue. To make that skill
+available to Claude Code in any project, symlink it into your personal
+skills directory once:
+
+```sh
+ln -s "$(pwd)/skills/wtm-linear" ~/.claude/skills/wtm-linear
+```
+
 ## Design notes
 
 - **No database.** All state is derived live from `git worktree list
