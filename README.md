@@ -29,11 +29,38 @@ See [wtm-plan.md](./wtm-plan.md) for the full design doc.
 - `spf13/cobra` — optional headless CLI commands
 - `gopkg.in/yaml.v3` — config
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mlcarvalho1/wtm/main/install.sh | bash
+```
+
+An interactive wizard for macOS and Linux: checks for `git`/`tmux`/`go`,
+offers to install anything missing, builds and installs `wtm`, and sets up
+`PATH` and a default config. See [USAGE.md](./USAGE.md#install) for
+details and a manual-install alternative.
+
 ## Build
 
 ```sh
 go build ./...
 ```
+
+## Versioning & updates
+
+`wtm` follows semver, currently `0.0.1`. Check the installed version and
+look for a newer one with:
+
+```sh
+wtm version   # print the installed version
+wtm update    # check GitHub for a newer release and reinstall it
+```
+
+`wtm update` checks the repo's latest GitHub release (falling back to its
+newest tag), and if it's newer than what's installed, reinstalls via
+`go install github.com/Mlcarvalho1/wtm/cmd/wtm@v<version>` — the same
+mechanism [install.sh](./install.sh) uses. It requires a Go toolchain on
+`PATH`.
 
 ## Keybindings
 
